@@ -20,7 +20,7 @@ The application is deployed and accessible online.
 |---|---|
 | Frontend | Vercel |
 | Backend | Render |
-| Database | Aiven MySQL |
+| Database | TiDB Cloud Starter |
 
 **Backend API:** https://smart-hospital-backend-87wx.onrender.com
 
@@ -50,7 +50,7 @@ We have provided a dedicated guest account so that hackathon judges, evaluators,
 
 **Please use fictional patient information for testing.**
 
-This guest account is intended exclusively for demonstration and hackathon evaluation.
+This guest account is intended exclusively for demonstration and hackathon evaluation. Limit its permissions and rotate or disable these publicly documented credentials when judge access is no longer needed.
 
 ---
 
@@ -105,14 +105,22 @@ The platform helps authorized users:
 - Update resource information.
 - Monitor resource availability to support emergency operations.
 
-### ⚡ 4. Resource Allocation
+### ⚡ 4. Smart-Assisted Manual Allocation (SA-MA)
 
-- Allocate available resources to emergency patients.
-- Update availability when allocations occur.
-- Use backend concurrency controls to reduce conflicting allocations.
-- Support coordinated management of limited resources.
+- Present staff with available beds, doctors, and equipment, including eligibility explanations.
+- Require staff confirmation before assigning resources to an arrived patient.
+- Validate bed type, oxygen and ventilator requirements, doctor specialization and shift, and equipment location.
+- Update patient and resource statuses together when an allocation is confirmed.
+- Complete treatment and release assigned resources through a dedicated workflow.
+- Use database transactions and row-level locks to prevent conflicting concurrent allocations.
 
-### 📊 5. Interactive Dashboard
+### 🚑 5. Pre-Arrival and Emergency Coordination
+
+- Record arrived and pre-arrival emergency cases.
+- Track urgency and arrival status for the emergency queue.
+- Manage ambulance-related emergency workflows without live GPS tracking.
+
+### 📊 6. Interactive Dashboard
 
 - Centralized management interface.
 - Hospital and resource information.
@@ -120,7 +128,7 @@ The platform helps authorized users:
 - Clear navigation between application features.
 - Responsive React-based user interface.
 
-### 🔐 6. Authentication and Security
+### 🔐 7. Authentication and Security
 
 - Administrator and staff authentication.
 - Session-based authentication using Spring Security.
@@ -136,11 +144,11 @@ The platform helps authorized users:
 |---|---|
 | Frontend | React, Vite, JavaScript, CSS |
 | Backend | Java 25, Spring Boot 4, Spring Security |
-| Database | MySQL 8.4 |
+| Database | TiDB Cloud Starter (MySQL-compatible SQL) |
 | ORM | Spring Data JPA / Hibernate |
 | Frontend Hosting | Vercel |
 | Backend Hosting | Render |
-| Database Hosting | Aiven |
+| Database Hosting | TiDB Cloud |
 | Containerization | Docker |
 | Build Tools | Maven, npm |
 | Version Control | Git and GitHub |
@@ -163,7 +171,8 @@ The platform helps authorized users:
                   |
                   | Spring Data JPA
                   v
-             Aiven MySQL
+       TiDB Cloud Starter
+         (TLS / 4000)
 ```
 
 ### How It Works
@@ -172,8 +181,9 @@ The platform helps authorized users:
 2. The frontend sends API requests to the Spring Boot backend.
 3. Spring Security handles authentication and protected operations.
 4. The backend processes hospital, patient, resource, and allocation requests.
-5. Spring Data JPA and Hibernate interact with the Aiven MySQL database.
-6. Updated information is returned to the frontend.
+5. Spring Data JPA and Hibernate interact with TiDB Cloud over an encrypted MySQL-compatible connection.
+6. For allocation and release operations, the backend uses TiDB-compatible `SELECT ... FOR UPDATE` row locking within transactions.
+7. Updated information is returned to the frontend.
 
 ---
 
@@ -210,7 +220,7 @@ Make sure the following tools are installed:
 
 - Java JDK 25
 - Node.js and npm
-- MySQL Server
+- A MySQL-compatible database: local MySQL for development **or** a TiDB Cloud Starter instance
 - Git
 
 ### Step 1 — Clone the Repository
@@ -222,7 +232,7 @@ cd smart-hospital-emergency-manager
 
 ### Step 2 — Create the Database
 
-Create a MySQL database:
+For local development, create a database in your local MySQL server. For a cloud-backed setup, run the same statement in the TiDB Cloud SQL editor:
 
 ```sql
 CREATE DATABASE emergency_manager;
@@ -234,12 +244,12 @@ The backend reads database credentials and initial administrator settings from e
 
 | Variable | Description |
 |---|---|
-| `DB_HOST` | MySQL server hostname |
-| `DB_PORT` | MySQL server port |
+| `DB_HOST` | MySQL or TiDB Cloud server hostname |
+| `DB_PORT` | `3306` for typical local MySQL; `4000` for TiDB Cloud Starter |
 | `DB_NAME` | MySQL database name |
 | `DB_USER` | MySQL username |
 | `DB_PASSWORD` | MySQL password |
-| `DB_SSL_MODE` | Database SSL configuration |
+| `DB_SSL_MODE` | JDBC SSL mode; use `REQUIRED` for TiDB Cloud |
 | `BOOTSTRAP_ADMIN_EMAIL` | Initial administrator email |
 | `BOOTSTRAP_ADMIN_PASSWORD` | Initial administrator password |
 
@@ -255,6 +265,19 @@ DB_SSL_MODE=PREFERRED
 ```
 
 Set these variables in your local environment before running the backend.
+
+For **TiDB Cloud Starter**, use the connection details from your own TiDB Cloud dashboard:
+
+```env
+DB_HOST=<your-tidb-endpoint>
+DB_PORT=4000
+DB_NAME=emergency_manager
+DB_USER=<your-full-tidb-username>
+DB_PASSWORD=<your-tidb-password>
+DB_SSL_MODE=REQUIRED
+```
+
+Use the **full username** provided by TiDB Cloud; it may include a cluster-specific prefix. Keep the password in environment variables or a secrets manager, not in source control. The backend constructs its JDBC connection using these variables. The TiDB Cloud connection requires TLS.
 
 **Security:** Never commit actual database credentials or private administrator passwords to the repository.
 
@@ -284,7 +307,7 @@ The backend runs locally at:
 
 ### Step 5 — Start the Frontend
 
-Open a new terminal and navigate to the frontend directory:
+Open a new terminal in the **repository root** and navigate to the frontend directory:
 
 ```bash
 cd frontend
@@ -314,11 +337,19 @@ The Java 25 Spring Boot application is packaged using Docker and deployed as a R
 
 **Backend URL:** https://smart-hospital-backend-87wx.onrender.com
 
-### 3. Aiven — MySQL Database
+### 3. TiDB Cloud Starter — Database
 
-The application uses a cloud-hosted MySQL database provided by Aiven.
+The deployed application uses **TiDB Cloud Starter**, a MySQL-compatible managed database. The earlier Aiven MySQL deployment has been replaced.
 
-Database credentials are configured securely through backend environment variables.
+- **Database name:** `emergency_manager`
+- **Connection port:** `4000`
+- **TLS:** required (`DB_SSL_MODE=REQUIRED`)
+- **Credentials:** supplied through Render environment variables; never committed to GitHub
+- **Schema:** managed by the application's Spring Data JPA/Hibernate configuration
+
+The allocation service uses TiDB-compatible `SELECT id FROM ... WHERE id = ? FOR UPDATE` queries inside Spring-managed transactions. This preserves row-level locking for case and resource allocation without relying on Hibernate's incompatible `FOR UPDATE OF <alias>` syntax.
+
+> **Deployment note:** Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_SSL_MODE` in **Render → Environment**. Use your own TiDB Cloud connection values rather than copying someone else's credentials. The backend remains hosted on Render; the frontend remains hosted on Vercel.
 
 ---
 
@@ -329,9 +360,19 @@ Database credentials are configured securely through backend environment variabl
 3. **Resource Configuration:** Emergency resources are registered and their availability is recorded.
 4. **Patient Registration:** An emergency patient is entered into the system.
 5. **Patient Prioritization:** The patient's urgency is considered during emergency handling.
-6. **Resource Allocation:** An available resource is assigned to the patient.
-7. **Availability Update:** Resource availability is updated following allocation.
-8. **Dashboard Review:** Users monitor hospital information and resource status.
+6. **SA-MA Resource Review:** Staff review eligibility explanations and choose the required bed, doctor, and (if needed) ventilator.
+7. **Confirm Allocation:** The backend locks and rechecks the selected records in a transaction, starts treatment, and updates resource availability.
+8. **Complete & Release:** Staff complete treatment and release the assigned resources.
+9. **Dashboard Review:** Users monitor hospital information and resource status.
+
+---
+
+## 🔧 Deployment and Database Notes
+
+- Render free-tier instances may take extra time to respond after inactivity. This is a hosting cold start, not necessarily a database outage.
+- TiDB Cloud Starter replaces the old Aiven database for the deployed application; the README does not claim that every historical Aiven record was copied.
+- Use fictional patient data only. Test data and account permissions should be reviewed before sharing the public demo.
+- The database and API should be monitored separately when troubleshooting connectivity issues.
 
 ---
 
@@ -339,9 +380,9 @@ Database credentials are configured securely through backend environment variabl
 
 Potential future improvements include:
 
-- Real-time alerts and emergency notifications.
+- Additional alert delivery channels and notification integrations.
 - Integration with existing hospital information systems.
-- Advanced resource allocation recommendations.
+- More advanced allocation recommendations and decision-support explanations.
 - Geographic hospital search and routing.
 - Emergency demand forecasting and analytics.
 - Expanded role-based access controls.
@@ -373,6 +414,6 @@ All testing should use fictional patient information.
 
 ### ⭐ Built With
 
-**React • Vite • Java 25 • Spring Boot • Spring Security • MySQL • Docker • Vercel • Render • Aiven**
+**React • Vite • Java 25 • Spring Boot • Spring Security • TiDB Cloud • Docker • Vercel • Render**
 
 **Smart Hospital Emergency Resource Manager — Making Emergency Resource Coordination Smarter.**
