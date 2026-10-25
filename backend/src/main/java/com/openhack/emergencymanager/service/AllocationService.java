@@ -3,7 +3,6 @@ package com.openhack.emergencymanager.service;
 import com.openhack.emergencymanager.model.*;
 import com.openhack.emergencymanager.repository.*;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.LockModeType;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,11 +60,40 @@ public class AllocationService {
         return new ResponseStatusException(HttpStatus.CONFLICT, msg);
     }
 
+    /**
+     * TiDB supports SELECT ... FOR UPDATE but not Hibernate's generated
+     * FOR UPDATE OF <table_alias>. Lock by primary key with native SQL, then
+     * refresh the managed entity to read its state after the lock is acquired.
+     * Call only from a write transaction (@Transactional).
+     */
+    private <T> T findWithRowLock(Class<T> type, Long id) {
+        if (id == null) return null;
+
+        // Hard-coded whitelist: never interpolate a table name from user input.
+        String table;
+        if (type == EmergencyCase.class) table = "emergency_cases";
+        else if (type == Bed.class) table = "hospital_beds";
+        else if (type == Doctor.class) table = "doctors";
+        else if (type == Equipment.class) table = "medical_equipment";
+        else if (type == AllocationHold.class) table = "allocation_holds";
+        else throw new IllegalArgumentException("Unsupported lock entity: " + type.getName());
+
+        List<?> rows = em.createNativeQuery(
+                "SELECT id FROM " + table + " WHERE id = :id FOR UPDATE")
+            .setParameter("id", id)
+            .getResultList();
+        if (rows.isEmpty()) return null;
+
+        T entity = em.find(type, id);
+        if (entity != null) em.refresh(entity);
+        return entity;
+    }
+
     private EmergencyCase caseForHospital(Long hospitalId, Long caseId, boolean lock) {
         if (!hospitals.existsById(hospitalId))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Hospital not found");
         EmergencyCase c = lock
-            ? em.find(EmergencyCase.class, caseId, LockModeType.PESSIMISTIC_WRITE)
+            ? findWithRowLock(EmergencyCase.class, caseId)
             : cases.findById(caseId).orElse(null);
         if (c == null || !c.getHospital().getId().equals(hospitalId))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Case not found in this hospital");
@@ -74,10 +102,9 @@ public class AllocationService {
 
     private <T> T lockResource(Class<T> type, Long id) {
         if (id == null) return null;
-        T value = em.find(type, id, LockModeType.PESSIMISTIC_WRITE);
+        T value = findWithRowLock(type, id);
         if (value == null)
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Selected resource not found");
-        em.refresh(value, LockModeType.PESSIMISTIC_WRITE);
         return value;
     }
 
@@ -297,10 +324,9 @@ public class AllocationService {
         AllocationHold first = holds.findById(allocationId).orElseThrow(() ->
             new ResponseStatusException(HttpStatus.NOT_FOUND, "Allocation not found"));
         EmergencyCase c = caseForHospital(hospitalId, first.getEmergencyCase().getId(), true);
-        AllocationHold locked = em.find(AllocationHold.class, allocationId, LockModeType.PESSIMISTIC_WRITE);
+        AllocationHold locked = findWithRowLock(AllocationHold.class, allocationId);
         if (locked == null || !locked.getEmergencyCase().getId().equals(c.getId()))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Allocation not found in this hospital");
-        em.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
         return locked;
     }
 
